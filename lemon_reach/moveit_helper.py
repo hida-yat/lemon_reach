@@ -4,9 +4,10 @@ import threading
 
 from rclpy.action import ActionClient
 
+from builtin_interfaces.msg import Duration
 from moveit_msgs.action import ExecuteTrajectory
 from moveit_msgs.msg import MoveItErrorCodes, PlanningSceneComponents
-from moveit_msgs.srv import GetMotionPlan, GetPlanningScene
+from moveit_msgs.srv import GetMotionPlan, GetPlanningScene, GetPositionIK
 from std_srvs.srv import Empty
 
 
@@ -35,6 +36,7 @@ class MoveItHelper:
         # 起動直後はMoveItのサービスが見つかるまで時間がかかる
         node.declare_parameter("service_timeout", 5.0)
         node.declare_parameter("execute_timeout", 60.0)
+        node.declare_parameter("ik_timeout", 0.05)
 
         self.planning_group = node.get_parameter("planning_group").value
         self.max_plan_attempts = node.get_parameter("max_plan_attempts").value
@@ -50,6 +52,7 @@ class MoveItHelper:
         self.octomap_settle_sec = node.get_parameter("octomap_settle_sec").value
         self.service_timeout = node.get_parameter("service_timeout").value
         self.execute_timeout = node.get_parameter("execute_timeout").value
+        self.ik_timeout = node.get_parameter("ik_timeout").value
 
         self.plan_client = node.create_client(
             GetMotionPlan, "/plan_kinematic_path",
@@ -57,6 +60,10 @@ class MoveItHelper:
         )
         self.scene_client = node.create_client(
             GetPlanningScene, "/get_planning_scene",
+            callback_group=callback_group
+        )
+        self.ik_client = node.create_client(
+            GetPositionIK, "/compute_ik",
             callback_group=callback_group
         )
         self.clear_octomap_client = node.create_client(
@@ -107,6 +114,45 @@ class MoveItHelper:
             return None
 
         js = response.scene.robot_state.joint_state
+        return dict(zip(js.name, js.position))
+
+    def compute_ik(self, frame_id, link, position, orientation, seed):
+        """
+        link を frame_id での position / orientation (x, y, z, w) に置く関節角
+        {name: position} を、seed {name: position} を初期値にして解く。
+        衝突は見ない (Lemonや枝のボクセルに入る姿勢も解く)。解けなければ None
+        """
+
+        request = GetPositionIK.Request()
+
+        ik = request.ik_request
+        ik.group_name = self.planning_group
+        ik.ik_link_name = link
+        ik.avoid_collisions = False
+        ik.timeout = Duration(
+            sec=int(self.ik_timeout), nanosec=int(self.ik_timeout % 1.0 * 1e9)
+        )
+        ik.robot_state.joint_state.name = list(seed.keys())
+        ik.robot_state.joint_state.position = [float(v) for v in seed.values()]
+
+        pose = ik.pose_stamped
+        pose.header.frame_id = frame_id
+        pose.pose.position.x = float(position[0])
+        pose.pose.position.y = float(position[1])
+        pose.pose.position.z = float(position[2])
+        (
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w,
+        ) = (float(v) for v in orientation)
+
+        response = self.call(self.ik_client, request, self.service_timeout)
+
+        if response is None or response.error_code.val != MoveItErrorCodes.SUCCESS:
+            return None
+
+        js = response.solution.joint_state
         return dict(zip(js.name, js.position))
 
     def plan_and_execute(self, constraints, label):

@@ -18,8 +18,10 @@ class LemonHarvestManager(Node):
     各ノードのServiceを順に呼ぶだけの簡易シーケンサ (将来Behavior Treeに置換)。
 
         対象が固定されるのを待つ
-        → /lemon_approach/approach  (Lemon手前へ移動。現時点ではここで把持完了とみなす)
+        → /lemon_approach/approach  (固定位置をもとにLemon手前 (pregrasp) へ移動)
+        → /lemon_grasp/grasp        (Servoで追従しながら掴み、pregraspへ戻る)
         → /arm_home/go_home         (起動時の姿勢へ戻る)
+        → /lemon_grasp/open         (グリッパを開いてLemonを離す)
         → /lemon_target/release     (対象を解除。home姿勢の視野で次の対象を選び直す)
         → 繰り返し
     """
@@ -37,6 +39,12 @@ class LemonHarvestManager(Node):
 
         self.approach_client = self.create_client(
             Trigger, "/lemon_approach/approach", callback_group=self.cb_group
+        )
+        self.grasp_client = self.create_client(
+            Trigger, "/lemon_grasp/grasp", callback_group=self.cb_group
+        )
+        self.open_client = self.create_client(
+            Trigger, "/lemon_grasp/open", callback_group=self.cb_group
         )
         self.home_client = self.create_client(
             Trigger, "/arm_home/go_home", callback_group=self.cb_group
@@ -93,8 +101,14 @@ class LemonHarvestManager(Node):
             ok, message = self.call(self.approach_client)
 
             if ok:
-                # 現時点ではLemon手前への移動で把持完了とみなす
-                self.get_logger().info("Grasp done (approach reached)")
+                self.publish_status("grasping")
+                ok, message = self.call(self.grasp_client)
+
+                if ok:
+                    self.get_logger().info("Grasped")
+                else:
+                    self.get_logger().warn(f"Grasp failed: {message}")
+
             else:
                 self.get_logger().warn(f"Approach failed: {message}")
 
@@ -108,6 +122,13 @@ class LemonHarvestManager(Node):
                 )
                 self.publish_status("error")
                 return
+
+            # 把持に失敗していても閉じたままにしないよう常に開く
+            self.publish_status("opening")
+            ok, message = self.call(self.open_client)
+
+            if not ok:
+                self.get_logger().warn(f"Open gripper failed: {message}")
 
             self.publish_status("releasing")
             self.target_event.clear()

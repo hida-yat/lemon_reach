@@ -18,6 +18,9 @@
   <depend>python3-numpy</depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>yolo_bringup</exec_depend>
+  <exec_depend>lemon_grasp</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>piper_with_gripper_moveit</exec_depend>
   <depend>geometry_msgs</depend>
   <depend>shape_msgs</depend>
   <depend>moveit_msgs</depend>
@@ -26,6 +29,10 @@
   <depend>sensor_msgs</depend>
   <depend>sensor_msgs_py</depend>
   <depend>yolo_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>lemon_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

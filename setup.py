@@ -25,6 +25,7 @@ setup(
             "lemon_approach_node = lemon_reach.lemon_approach_node:main",
             "arm_home_node = lemon_reach.arm_home_node:main",
             "lemon_harvest_manager_node = lemon_reach.lemon_harvest_manager_node:main",
+            "lemon_ellipse_node = lemon_reach.lemon_ellipse_node:main",
         ],
     },
 )

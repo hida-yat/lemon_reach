@@ -2,57 +2,93 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def generate_launch_description():
+    """
+    収穫に使うノードを起動する。YOLO は含まないので、先に別途起動しておく
+    (例: ros2 launch lemon_reach lemon_yolo.launch.py)。
+    """
 
     use_sim_time = LaunchConfiguration("use_sim_time")
-    use_yolo = LaunchConfiguration("use_yolo")
     params = [{"use_sim_time": use_sim_time}]
-
-    # yolo_ros (2D検出 + detect_3d_node で base_link 座標の3D位置)
-    yolo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("yolo_bringup"),
-                "launch",
-                "yolov8.launch.py",
-            )
+    target_params = [{
+        "use_sim_time": use_sim_time,
+        "score_threshold": ParameterValue(
+            LaunchConfiguration("score_threshold"), value_type=float
         ),
-        launch_arguments={
-            "use_3d": "True",
-            "input_depth_topic": "/realsense/depth/image_rect_raw",
-            "input_depth_info_topic": "/realsense/color/camera_info",
-            "target_frame": "base_link",
-            # Isaac Simの深度は 32FC1 [m]
-            "depth_image_units_divisor": "1",
-        }.items(),
-        condition=IfCondition(use_yolo),
+    }]
+    # 指先をレモン中心よりどれだけ奥まで入れるか。approach はその先 3 cm まで
+    # 直線で入れられることを確かめる (insert_margin >= grasp_depth + 0.03)
+    approach_params = [{
+        "use_sim_time": use_sim_time,
+        "insert_margin": ParameterValue(
+            LaunchConfiguration("insert_margin"), value_type=float
+        ),
+    }]
+
+    # lemon_grasp_node は Servo を同じプロセスで動かすのでロボットモデルが要る
+    moveit_config = MoveItConfigsBuilder(
+        "piper", package_name="piper_with_gripper_moveit"
+    ).to_moveit_configs()
+    servo_yaml = os.path.join(
+        get_package_share_directory("lemon_grasp"), "config", "servo.yaml"
     )
 
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument(
-            "use_yolo",
-            default_value="true",
-            description="Whether to launch yolo_ros together",
+            "score_threshold",
+            default_value="0.5",
+            description="Minimum YOLO score used by lemon_target",
         ),
-        yolo,
+        DeclareLaunchArgument(
+            "grasp_depth",
+            default_value="0.03",
+            description="How far the fingertips go beyond the lemon center [m]",
+        ),
+        DeclareLaunchArgument(
+            "insert_margin",
+            default_value="0.06",
+            description="Straight insertion checked beyond the lemon center [m] "
+                        "(keep >= grasp_depth + 0.03)",
+        ),
         Node(
             package="lemon_reach",
             executable="lemon_target_node",
-            parameters=params,
+            parameters=target_params,
             output="screen",
         ),
         Node(
             package="lemon_reach",
             executable="lemon_approach_node",
-            parameters=params,
+            parameters=approach_params,
+            output="screen",
+        ),
+        Node(
+            package="lemon_grasp",
+            executable="lemon_grasp_node",
+            name="lemon_grasp",
+            parameters=[
+                moveit_config.robot_description,
+                moveit_config.robot_description_semantic,
+                moveit_config.robot_description_kinematics,
+                moveit_config.joint_limits,
+                servo_yaml,
+                {
+                    "use_sim_time": use_sim_time,
+                    "grasp_depth": ParameterValue(
+                        LaunchConfiguration("grasp_depth"), value_type=float
+                    ),
+                },
+            ],
+            # PoseTracking が購読する target_pose をノードの名前空間に入れる
+            remappings=[("target_pose", "/lemon_grasp/target_pose")],
             output="screen",
         ),
         Node(
